@@ -61,9 +61,9 @@ def dynamic_update(payload: dict, animal_detected=False, das_detected=False, min
             is_blocked = 0
 
             if (
-                (minor_detected and nsfw_detected) or
+                minor_detected  or
                 personal_info_detected or
-                (animal_detected and nsfw_detected) or
+                animal_detected or
                 violence_detected or
                 das_detected or
                 weapon_detected
