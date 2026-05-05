@@ -12,10 +12,12 @@ from merged_owlvit_detector import run_merged_detection
 from face_detect.minor_detect import is_minor
 from meetup_detect.personal_details_detect import detect_personal_info
 from violance_detect.violation_detect import is_violence_detected
+from alcohol_detect.detect_alcohol import is_alcohol_detected
+from smoking_detect.detect_smoking import is_smoking_detected
 from nsfw.nsfw_detector import is_nsfw
 
 from dynamic_update import dynamic_update
-from config import REDIS_HOST, REDIS_PORT, REDIS_DB, INPUT_QUEUE, REDIS_BRPOP_TIMEOUT
+from config import REDIS_HOST, REDIS_PORT, REDIS_DB, VIDEO_QUEUE, REDIS_BRPOP_TIMEOUT
 
 
 # =====================================================
@@ -39,7 +41,7 @@ POSSIBLE_BASE_PATHS = [
     "/var/www/html/admin.fliqzworld.com/storage",
     "/var/www/html/admin.fliqzworld.com/public_html/storage",
     "D:/codex/bots/NSFW-DETECT-BOT/var/www/html/admin.fliqzworld.com/public/storage",
-    "C:/CodeX/fliqz-world-media-bots"
+    "C:/CodeX/fliqz-world-moderation"
 ]
 
 def get_valid_base_path():
@@ -148,7 +150,6 @@ def run_video_with_voting(
 
     label_hits = {
         "animal": 0,
-        "das": 0,
         "nsfw": 0,
         "weapon": 0
     }
@@ -222,6 +223,8 @@ def process_redis(payload: dict):
     # -----------------------------
     animal_detected = False
     das_detected = False
+    alcohol_detected = False
+    smoking_detected = False
     weapon_detected = False
     minor_detected = False
     personal_info_detected = False
@@ -293,12 +296,10 @@ def process_redis(payload: dict):
         return
 
     animal_detected = merged["animal"]
-    das_detected = merged["das"]
     weapon_detected = merged["weapon"]
 
     print("[OWL RESULT]", {
         "animal": animal_detected,
-        "das": das_detected,
         "weapon": weapon_detected
     })
 
@@ -315,7 +316,6 @@ def process_redis(payload: dict):
             print("[STOP] Animal + NSFW")
             print("[DB DATA]", {
                 "animal_detected": animal_detected,
-                "das_detected": das_detected,
                 "weapon_detected": weapon_detected,
                 "nsfw_detected": nsfw_detected
             })
@@ -323,7 +323,6 @@ def process_redis(payload: dict):
             success, status = dynamic_update(
                 payload=payload,
                 animal_detected=animal_detected,
-                das_detected=das_detected,
                 weapon_detected=weapon_detected,
                 nsfw_detected=nsfw_detected
             )
@@ -341,6 +340,28 @@ def process_redis(payload: dict):
     except Exception as e:
         print("[ERROR] Violence:", e)
         
+    # =====================================================
+    # 5️⃣ ALCOHOL DETECTION (YOLO)
+    # =====================================================
+    try:
+        print("[CHECK] Alcohol...")
+        alcohol_detected = is_alcohol_detected(file_path)
+    except Exception as e:
+        print("[ERROR] Alcohol:", e)
+
+    # =====================================================
+    # 6️⃣ SMOKING DETECTION (YOLO)
+    # =====================================================
+    try:
+        print("[CHECK] Smoking...")
+        smoking_detected = is_smoking_detected(file_path)
+    except Exception as e:
+        print("[ERROR] Smoking:", e)
+
+    # =====================================================
+    # MAP TO DAS (DB COMPATIBILITY)
+    # =====================================================
+    das_detected = alcohol_detected or smoking_detected
 
     # =====================================================
     # 4️⃣ NSFW FINAL CHECK
@@ -358,7 +379,9 @@ def process_redis(payload: dict):
     print("[FINAL] Saving results")
     print("✅ Detection complete.")   
     print(f"   Animal Detected: {animal_detected}")
-    print(f"   DAS Detected: {das_detected}")
+    print(f"   Alcohol Detected: {alcohol_detected}")
+    print(f"   Smoking Detected: {smoking_detected}")
+    print(f"   DAS (mapped): {das_detected}")
     print(f"   Minor Detected: {minor_detected}")
     print(f"   Personal Info Detected: {personal_info_detected}")
     print(f"   NSFW Detected: {nsfw_detected}")
@@ -385,11 +408,11 @@ def process_redis(payload: dict):
 # =====================================================
 def worker():
     print("🚀 Media Moderation Worker started")
-    print("📥 Listening on:", INPUT_QUEUE)
+    print("📥 Listening on:", VIDEO_QUEUE)
 
     while True:
         try:
-            item = r.brpop(INPUT_QUEUE, timeout=REDIS_BRPOP_TIMEOUT)
+            item = r.brpop(VIDEO_QUEUE, timeout=REDIS_BRPOP_TIMEOUT)
             if not item:
                 time.sleep(0.1)
                 continue

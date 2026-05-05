@@ -7,16 +7,16 @@ from pathlib import Path
 from PIL import Image
 from model import owl_model, owl_processor, DEVICE
 
-
 from face_detect.minor_detect import is_minor
 from meetup_detect.personal_details_detect import detect_personal_info  
 from violance_detect.violation_detect import is_violence_detected
-from merged_owlvit_detector import run_merged_detection
-from nsfw.nsfw_detector import is_nsfw
 from alcohol_detect.detect_alcohol import is_alcohol_detected
 from smoking_detect.detect_smoking import is_smoking_detected
+from merged_owlvit_detector import run_merged_detection
+from nsfw.nsfw_detector import is_nsfw
+
 from dynamic_update import dynamic_update
-from config import REDIS_HOST, REDIS_PORT, REDIS_DB, IMAGE_QUEUE, REDIS_BRPOP_TIMEOUT
+from config import REDIS_HOST, REDIS_PORT, REDIS_DB, STREAM_QUEUE, REDIS_BRPOP_TIMEOUT
 
 # -----------------------------
 # Redis
@@ -33,12 +33,11 @@ r = redis.Redis(
 # ORIGINAL PATH HANDLING (RESTORED)
 # -----------------------------
 POSSIBLE_BASE_PATHS = [
-    "/var/www/html/admin.fliqzworld.com/public/storage",
-    "/var/www/html/admin.fliqzworld.com/storage",
-    "/var/www/html/admin.fliqzworld.com/public_html/storage",
-    "D:/codex/bots/NSFW-DETECT-BOT/var/www/html/admin.fliqzworld.com/public/storage",
-    "C:/CodeX/fliqz-world-moderation",
-    "C:/Codex2/fliqz-world-moderation/fliqz-world-moderation"
+    "/var/www/html/admin.fliqzworld.com/public/storage/stream",
+    "/var/www/html/admin.fliqzworld.com/storage/stream",
+    "/var/www/html/admin.fliqzworld.com/public_html/storage/stream",
+    "D:/codex/bots/NSFW-DETECT-BOT/var/www/html/admin.fliqzworld.com/public/storage/stream",
+    "C:/CodeX/fliqz-world-moderation/stream"
 ]
 
 def get_valid_base_path():
@@ -168,12 +167,12 @@ def process_redis(payload: dict):
     # -----------------------------
     animal_detected = False
     das_detected = False
+    alcohol_detected = False
+    smoking_detected = False
     minor_detected = False
     personal_info_detected = False
     nsfw_detected = None
     violence_detected = False
-    alcohol_detected = False
-    smoking_detected = False
     weapon_detected = False
 
 
@@ -286,6 +285,7 @@ def process_redis(payload: dict):
     except Exception as e:
         print("Violence error:", e)
 
+
     # =====================================================
     # 5️⃣ ALCOHOL DETECTION (YOLO)
     # =====================================================
@@ -307,8 +307,7 @@ def process_redis(payload: dict):
     # =====================================================
     # MAP TO DAS (DB COMPATIBILITY)
     # =====================================================
-    das_detected = alcohol_detected or smoking_detected
-
+    das_detected = alcohol_detected or smoking_detected    
 
     # =====================================================
     # ENSURE NSFW WAS AT LEAST CHECKED ONCE
@@ -357,11 +356,11 @@ def process_redis(payload: dict):
 # =====================================================
 def worker():
     print("🚀 Media Moderation Worker started")
-    print("📥 Listening on:", IMAGE_QUEUE)
+    print("📥 Listening on:", STREAM_QUEUE)
 
     while True:
         try:
-            item = r.brpop(IMAGE_QUEUE, timeout=REDIS_BRPOP_TIMEOUT)
+            item = r.brpop(STREAM_QUEUE, timeout=REDIS_BRPOP_TIMEOUT)
             if not item:
                 time.sleep(0.1)
                 continue

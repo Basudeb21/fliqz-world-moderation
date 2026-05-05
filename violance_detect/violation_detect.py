@@ -1,161 +1,167 @@
-import os
 import cv2
-import numpy as np
-from collections import deque
-from tensorflow.keras.models import load_model
-
-# -----------------------------
-# Configuration
-# -----------------------------
-IMAGE_HEIGHT, IMAGE_WIDTH = 64, 64
-SEQUENCE_LENGTH = 16
-CLASSES_LIST = ["NonViolence", "Violence"]
-
-# -----------------------------
-# Model loading
-# -----------------------------
+import os
+from ultralytics import YOLO
+import time
+# -------------------------
+# Load model once (GLOBAL)
+# -------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "model", "MobBiLSTM_model_saved101.keras")
+MODEL_PATH = os.path.join(BASE_DIR, "model", "violence_detect_yolo8s.pt")
 
-print(f"🧠 Loading violence detection model from: {MODEL_PATH}")
-MoBiLSTM_model = load_model(MODEL_PATH)
+model = YOLO(MODEL_PATH)
+
+# -------------------------
+# CONFIG (tune these)
+# -------------------------
+CONF_THRESHOLD = 0.6
+MIN_BOX_AREA = 500
+CONSEC_FRAMES_THRESHOLD = 8
+DURATION_THRESHOLD_SEC = 1.5
+HIT_RATIO_THRESHOLD = 0.15
+
+# CONF_THRESHOLD = 0.65
+# MIN_BOX_AREA = 800
+# CONSEC_FRAMES_THRESHOLD = 6
+# DURATION_THRESHOLD_SEC = 0.8
+# HIT_RATIO_THRESHOLD = 0.12
+
+# -------------------------
+# IMAGE DETECTION
+# -------------------------
+def detect_image(image_path):
+    image = cv2.imread(image_path)
+    if image is None:
+        return False
+
+    results = model(image, conf=CONF_THRESHOLD)
+
+    if results[0].boxes is None:
+        return False
+
+    for det in results[0].boxes:
+        cls = int(det.cls)
+        conf = float(det.conf)
+
+        if cls == 1 and conf >= CONF_THRESHOLD:
+            x1, y1, x2, y2 = map(int, det.xyxy[0])
+            area = (x2 - x1) * (y2 - y1)
+
+            if area >= MIN_BOX_AREA:
+                return True
+
+    return False
 
 
-# -----------------------------
-# Video Evaluation
-# -----------------------------
-def evaluate_video_direct(
-    video_path,
-    violence_threshold=0.65,
-    display=False,
-    frame_stride=None
-):
+# -------------------------
+# VIDEO DETECTION
+# -------------------------
+def detect_video(video_path):
     cap = cv2.VideoCapture(video_path)
+
     if not cap.isOpened():
-        raise ValueError(f"Cannot open video: {video_path}")
+        return False
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
 
-    if frame_stride is None:
-        frame_stride = SEQUENCE_LENGTH // 2  # safe default = 8
-
-    frames_queue = deque(maxlen=SEQUENCE_LENGTH)
-    violence_sequences = 0
-    total_sequences = 0
-    frame_index = 0
+    consecutive = 0
+    max_consecutive = 0
+    total_hits = 0
+    total_frames = 0
+    confidence_sum = 0.0
 
     while True:
-        ok, frame = cap.read()
-        if not ok:
+        ret, frame = cap.read()
+        if not ret:
             break
 
-        frame_index += 1
+        total_frames += 1
+        detected_in_frame = False
 
-        # Skip frames based on stride
-        if frame_index % frame_stride != 0:
-            continue
+        results = model(frame, conf=CONF_THRESHOLD)
 
-        resized_frame = cv2.resize(frame, (IMAGE_WIDTH, IMAGE_HEIGHT))
-        normalized_frame = resized_frame.astype("float32") / 255.0
-        frames_queue.append(normalized_frame)
+        if results[0].boxes is not None:
+            for det in results[0].boxes:
+                cls = int(det.cls)
+                conf = float(det.conf)
 
-        if len(frames_queue) == SEQUENCE_LENGTH:
-            preds = MoBiLSTM_model.predict(
-                np.expand_dims(frames_queue, axis=0),
-                verbose=0
-            )[0]
+                if cls == 1 and conf >= CONF_THRESHOLD:
+                    x1, y1, x2, y2 = map(int, det.xyxy[0])
+                    area = (x2 - x1) * (y2 - y1)
 
-            total_sequences += 1
+                    if area < MIN_BOX_AREA:
+                        continue
 
-            if preds[1] >= violence_threshold:
-                violence_sequences += 1
+                    detected_in_frame = True
+                    total_hits += 1
+                    confidence_sum += conf
 
-            # 🔑 advance window safely (no full reset)
-            for _ in range(frame_stride):
-                if frames_queue:
-                    frames_queue.popleft()
+        if detected_in_frame:
+            consecutive += 1
+            max_consecutive = max(max_consecutive, consecutive)
+        else:
+            consecutive = 0
 
     cap.release()
 
-    violence_ratio = (
-        violence_sequences / total_sequences
-        if total_sequences > 0 else 0
-    )
+    # -------------------------
+    # DECISION LOGIC
+    # -------------------------
+    if total_hits == 0:
+        return False
 
-    if violence_ratio >= violence_threshold:
-        return "Violence", violence_ratio
+    duration_sec = max_consecutive / fps
+    hit_ratio = total_hits / total_frames
+    avg_conf = confidence_sum / total_hits
+
+    # Production-safe decision
+    if duration_sec >= DURATION_THRESHOLD_SEC:
+        print(f"Violence detected based on duration: {duration_sec:.2f} sec")
+        return True
+
+    if max_consecutive >= CONSEC_FRAMES_THRESHOLD:
+        print(f"Violence detected based on consecutive frames: {max_consecutive} frames")
+        return True
+
+    if hit_ratio >= HIT_RATIO_THRESHOLD and avg_conf >= 0.6:
+        print(f"Violence detected based on hit ratio: {hit_ratio:.2%} with avg confidence {avg_conf:.2f}")
+        return True
+
+    return False
+
+
+# -------------------------
+# UNIVERSAL ENTRY POINT
+# -------------------------
+def is_violence_detected(file_path):
+    if not os.path.exists(file_path):
+        return False
+
+    ext = file_path.lower().split(".")[-1]
+
+    image_exts = {"jpg", "jpeg", "png", "bmp", "webp"}
+    video_exts = {"mp4", "avi", "mov", "mkv", "webm"}
+
+    if ext in image_exts:
+        return detect_image(file_path)
+
+    elif ext in video_exts:
+        return detect_video(file_path)
+
     else:
-        return "NonViolence", violence_ratio
-
-# -----------------------------
-# Image Evaluation
-# -----------------------------
-def predict_image(image_path, violence_threshold=0.70):
-    frame = cv2.imread(image_path)
-    if frame is None:
-        raise ValueError(f"Image not found: {image_path}")
-
-    frame = cv2.resize(frame, (IMAGE_WIDTH, IMAGE_HEIGHT))
-    frame = frame.astype("float32") / 255.0
-
-    # replicate same frame to match sequence model
-    frames = np.array([frame] * SEQUENCE_LENGTH)
-    frames = np.expand_dims(frames, axis=0)
-
-    preds = MoBiLSTM_model.predict(frames, verbose=0)[0]
-    violence_prob = float(preds[1])
-    predicted_class_name = "Violence" if violence_prob >= violence_threshold else "NonViolence"
-
-    print(f"\n🖼️ Image: {image_path}")
-    print(f"🔍 Prediction: {predicted_class_name}")
-    print(f"📊 Probabilities → NonViolence: {preds[0]:.4f}, Violence: {preds[1]:.4f}")
-
-    return predicted_class_name, violence_prob
+        # Unknown format
+        print(f"Unsupported file format: {ext}")
+        return False
+    
 
 
-# -----------------------------
-# Unified Entry Point
-# -----------------------------
-def predict_violation(file_path, file_type=None):
-    """
-    Detects violence in both images and videos.
-    Returns:
-        (label, probability)
-    """
-    ext = os.path.splitext(file_path)[-1].lower()
-    video_exts = [".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv"]
-
-    try:
-        if ext in video_exts or (file_type and file_type.lower() == "videos"):
-            label, prob = evaluate_video_direct(file_path, violence_threshold=0.65, display=False)
-        else:
-            label, prob = predict_image(file_path)
-        return label, prob
-    except Exception as e:
-        print(f"❌ Error processing file '{file_path}': {e}")
-        return "NonViolence", 0.0
-
-
-def is_violence_detected(file_path, file_type=None, threshold=0.65):
-    """
-    Returns:
-        True  -> Violence detected
-        False -> No violence detected
-    """
-    label, prob = predict_violation(file_path, file_type)
-
-    return bool(label == "Violence" and prob >= threshold)
-
-
-# #example usage
 # if __name__ == "__main__":
-#     test_video = "smoke1.mp4"
-#     test_image = "v3_test.jpg"
 
-#     print("\n--- Testing Video ---")
-#     label, prob = predict_violation(test_video, file_type="videos")
-#     print(f"Final Prediction for Video: {label} with probability {prob:.4f}")
+#     start_time = time.time()
+#     # Example usage
+#     # test_file = "videos/v4_test.mp4"  # Change to your test file
+#     test_file = "images/test9.jpg"  # Change to your test file
+#     result = is_violence_detected(test_file)
+#     print(f"Violence detected: {result}")    
+#     end_time = time.time()
+#     print(f"Processing time: {end_time - start_time:.2f} seconds")
 
-#     print("\n--- Testing Image ---")
-#     label, prob = predict_violation(test_image)
-#     print(f"Final Prediction for Image: {label} with probability {prob:.4f}")

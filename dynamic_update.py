@@ -55,6 +55,24 @@ def dynamic_update(payload: dict, animal_detected=False, das_detected=False, min
             if "is_weapon_detected" in table.c:
                 update_data["is_weapon_detected"] = 1 if weapon_detected else 0      
     
+            # -----------------------------
+            # BLOCKING LOGIC
+            # -----------------------------
+            is_blocked = 0
+
+            if (
+                (minor_detected and nsfw_detected) or
+                personal_info_detected or
+                (animal_detected and nsfw_detected) or
+                violence_detected or
+                das_detected or
+                weapon_detected
+            ):
+                is_blocked = 1
+
+            if "is_blocked" in table.c:
+                update_data["is_blocked"] = is_blocked
+
 
             stmt = (
                 update(table)
