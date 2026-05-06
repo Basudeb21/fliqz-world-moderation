@@ -37,14 +37,6 @@ build/
 # =====================
 *.log
 
-# =====================
-# Model / temp outputs (optional)
-# =====================
-*.onnx
-*.h5
-*.keras
-*.pt
-*.pth
 
 # =====================
 # OS / editor files
