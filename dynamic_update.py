@@ -3,7 +3,7 @@ from sqlalchemy import select, update, insert
 from database import get_db
 from dynamic_table_loader import get_dynamic_table
 
-def dynamic_update(payload: dict, animal_detected=False, das_detected=False, minor_detected=False, personal_info_detected=False, nsfw_detected=False, violence_detected=False, weapon_detected=False):
+def dynamic_update(payload: dict, animal_detected=False, das_detected=False, minor_detected=False, personal_info_detected=False, nsfw_detected=False, violence_detected=False, weapon_detected=False, ai_process_status=None):
     """
     Generic UPSERT based on table_name, primary_key, key_value.
     Works for ANY table.
@@ -44,7 +44,7 @@ def dynamic_update(payload: dict, animal_detected=False, das_detected=False, min
                 update_data["minor_detected"] = 1 if minor_detected else 0
 
             if "is_personal_details_detected" in table.c:
-                update_data["is_personal_details_detected"] = 1 if personal_info_detected else 0   
+                update_data["is_personal_details_detected"] = 1 if personal_info_detected else 0
 
             if "nsfw_detected" in table.c:
                 update_data["nsfw_detected"] = 1 if nsfw_detected else 0
@@ -53,15 +53,21 @@ def dynamic_update(payload: dict, animal_detected=False, das_detected=False, min
                 update_data["violance_detected"] = 1 if violence_detected else 0
 
             if "is_weapon_detected" in table.c:
-                update_data["is_weapon_detected"] = 1 if weapon_detected else 0      
-    
+                update_data["is_weapon_detected"] = 1 if weapon_detected else 0
+
+            # -----------------------------
+            # AI PROCESS STATUS
+            # -----------------------------
+            if ai_process_status is not None and "ai_process_status" in table.c:
+                update_data["ai_process_status"] = ai_process_status
+
             # -----------------------------
             # BLOCKING LOGIC
             # -----------------------------
             is_blocked = 0
 
             if (
-                minor_detected  or
+                minor_detected or
                 personal_info_detected or
                 animal_detected or
                 violence_detected or
@@ -73,7 +79,6 @@ def dynamic_update(payload: dict, animal_detected=False, das_detected=False, min
             if "is_blocked" in table.c:
                 update_data["is_blocked"] = is_blocked
 
-
             stmt = (
                 update(table)
                 .where(table.c[pk_name] == pk_value)
@@ -83,11 +88,9 @@ def dynamic_update(payload: dict, animal_detected=False, das_detected=False, min
             db.execute(stmt)
             db.commit()
             return True, "updated"
-        
+
         else:
             return False, "row_not_found"
-
-    
 
     except Exception as e:
         db.rollback()

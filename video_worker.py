@@ -82,6 +82,21 @@ VIDEO_EXT = {".mp4", ".avi", ".mov", ".mkv"}
 
 
 # =====================================================
+# STATUS HELPER
+# =====================================================
+def set_process_status(payload: dict, status: int):
+    """Update only ai_process_status field in DB."""
+    try:
+        success, result = dynamic_update(
+            payload=payload,
+            ai_process_status=status
+        )
+        print(f"📊 ai_process_status → {status} ({'✅' if success else '❌ ' + result})")
+    except Exception as e:
+        print(f"❌ Status update error: {e}")
+
+
+# =====================================================
 # KEYFRAME EXTRACTION
 # =====================================================
 def extract_candidate_frames(
@@ -133,14 +148,13 @@ def extract_candidate_frames(
     return candidates[:max_frames]
 
 
-
 # =====================================================
 # VIDEO OWL WITH VOTING
 # =====================================================
 def run_video_with_voting(
     video_path: str,
     min_hits: int = 3,
-    min_ratio: float = 0.667  # 66.7%
+    min_ratio: float = 0.667
 ):
     print("[VIDEO] Starting video moderation pipeline")
     frames = extract_candidate_frames(video_path)
@@ -195,6 +209,7 @@ def run_video_with_voting(
     print("[VIDEO] OWL voting completed")
     return label_final
 
+
 # =====================================================
 # PROCESS REDIS MESSAGE
 # =====================================================
@@ -218,6 +233,9 @@ def process_redis(payload: dict):
     ext = Path(file_path).suffix.lower()
     print("[FILE]", file_path)
 
+    # ✅ STATUS → 2 (Processing started)
+    set_process_status(payload, 2)
+
     # -----------------------------
     # FLAGS
     # -----------------------------
@@ -229,7 +247,7 @@ def process_redis(payload: dict):
     minor_detected = False
     personal_info_detected = False
     violence_detected = False
-    nsfw_detected = None   # lazy
+    nsfw_detected = None
 
     # =====================================================
     # 1️⃣ MINOR
@@ -247,20 +265,15 @@ def process_redis(payload: dict):
 
         if nsfw_detected:
             print("[STOP] Child + NSFW")
-            print("[DB DATA]", {
-                "minor_detected": minor_detected,
-                "nsfw_detected": nsfw_detected
-            })
-
+            # ✅ STATUS → 3 (Done - early exit)
             success, status = dynamic_update(
                 payload=payload,
                 minor_detected=minor_detected,
-                nsfw_detected=nsfw_detected
+                nsfw_detected=nsfw_detected,
+                ai_process_status=3
             )
-
             print("[DB RESULT]", status if success else f"FAILED ({status})")
             return
-
 
     # =====================================================
     # 2️⃣ PII
@@ -273,18 +286,14 @@ def process_redis(payload: dict):
 
     if personal_info_detected:
         print("[STOP] Personal Info")
-        print("[DB DATA]", {
-            "personal_info_detected": personal_info_detected
-        })
-
+        # ✅ STATUS → 3 (Done - early exit)
         success, status = dynamic_update(
             payload=payload,
-            personal_info_detected=personal_info_detected
+            personal_info_detected=personal_info_detected,
+            ai_process_status=3
         )
-
         print("[DB RESULT]", status if success else f"FAILED ({status})")
         return
-
 
     # =====================================================
     # 3️⃣ OWL (VIDEO)
@@ -303,7 +312,6 @@ def process_redis(payload: dict):
         "weapon": weapon_detected
     })
 
-
     # =====================================================
     # 3️⃣a ANIMAL + NSFW
     # =====================================================
@@ -314,22 +322,16 @@ def process_redis(payload: dict):
 
         if nsfw_detected:
             print("[STOP] Animal + NSFW")
-            print("[DB DATA]", {
-                "animal_detected": animal_detected,
-                "weapon_detected": weapon_detected,
-                "nsfw_detected": nsfw_detected
-            })
-
+            # ✅ STATUS → 3 (Done - early exit)
             success, status = dynamic_update(
                 payload=payload,
                 animal_detected=animal_detected,
                 weapon_detected=weapon_detected,
-                nsfw_detected=nsfw_detected
+                nsfw_detected=nsfw_detected,
+                ai_process_status=3
             )
-
             print("[DB RESULT]", status if success else f"FAILED ({status})")
             return
-
 
     # =====================================================
     # 4️⃣ VIOLENCE
@@ -339,7 +341,7 @@ def process_redis(payload: dict):
         print("[CHECK] Violence:", violence_detected)
     except Exception as e:
         print("[ERROR] Violence:", e)
-        
+
     # =====================================================
     # 5️⃣ ALCOHOL DETECTION (YOLO)
     # =====================================================
@@ -358,35 +360,33 @@ def process_redis(payload: dict):
     except Exception as e:
         print("[ERROR] Smoking:", e)
 
-    # =====================================================
-    # MAP TO DAS (DB COMPATIBILITY)
-    # =====================================================
+    # MAP TO DAS
     das_detected = alcohol_detected or smoking_detected
 
     # =====================================================
-    # 4️⃣ NSFW FINAL CHECK
+    # FINAL NSFW CHECK
     # =====================================================
     if nsfw_detected is None:
         try:
-            print("🔍 Final NSFW check...")
+            print("[CHECK] Final NSFW check...")
             nsfw_detected = is_nsfw(file_path)
         except Exception as e:
-            print("NSFW error:", e)   
+            print("[ERROR] NSFW:", e)
 
     # =====================================================
-    # FINAL UPDATE
+    # FINAL UPDATE — STATUS → 3 (Fully done)
     # =====================================================
     print("[FINAL] Saving results")
-    print("✅ Detection complete.")   
-    print(f"   Animal Detected: {animal_detected}")
-    print(f"   Alcohol Detected: {alcohol_detected}")
-    print(f"   Smoking Detected: {smoking_detected}")
-    print(f"   DAS (mapped): {das_detected}")
-    print(f"   Minor Detected: {minor_detected}")
+    print("✅ Detection complete.")
+    print(f"   Animal Detected:        {animal_detected}")
+    print(f"   Alcohol Detected:       {alcohol_detected}")
+    print(f"   Smoking Detected:       {smoking_detected}")
+    print(f"   DAS (mapped):           {das_detected}")
+    print(f"   Minor Detected:         {minor_detected}")
     print(f"   Personal Info Detected: {personal_info_detected}")
-    print(f"   NSFW Detected: {nsfw_detected}")
-    print(f"   Violence Detected: {violence_detected}")
-    print(f"   Weapon Detected: {weapon_detected}") 
+    print(f"   NSFW Detected:          {nsfw_detected}")
+    print(f"   Violence Detected:      {violence_detected}")
+    print(f"   Weapon Detected:        {weapon_detected}")
 
     success, status = dynamic_update(
         payload=payload,
@@ -396,7 +396,8 @@ def process_redis(payload: dict):
         minor_detected=minor_detected,
         personal_info_detected=personal_info_detected,
         nsfw_detected=nsfw_detected if nsfw_detected else False,
-        violence_detected=violence_detected
+        violence_detected=violence_detected,
+        ai_process_status=3        # ✅ STATUS → 3 (Fully done)
     )
 
     print("[DB RESULT]", status if success else f"FAILED ({status})")
@@ -407,7 +408,7 @@ def process_redis(payload: dict):
 # WORKER LOOP
 # =====================================================
 def worker():
-    print("🚀 Media Moderation Worker started")
+    print("🚀 Video Moderation Worker started")
     print("📥 Listening on:", VIDEO_QUEUE)
 
     while True:
@@ -430,6 +431,7 @@ def worker():
         except Exception as e:
             print("❌ Worker error:", e)
             time.sleep(1)
+
 
 # -----------------------------
 # ENTRY
