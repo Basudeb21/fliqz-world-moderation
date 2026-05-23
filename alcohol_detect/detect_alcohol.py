@@ -5,7 +5,7 @@ from ultralytics import YOLO
 # -------------------------
 # LOAD MODEL (GLOBAL - DO NOT RELOAD)
 # -------------------------
-model = YOLO("alcohol_detect_yolov8s.pt")
+model = YOLO(os.path.join(os.path.dirname(__file__), "alcohol_detect_yolov8s.pt"))
 
 # -------------------------
 # CONFIG (TUNE BASED ON DATA)
@@ -121,17 +121,3 @@ def is_alcohol_detected(file_path: str) -> bool:
         return detect_video(file_path)
 
     return False
-
-
-
-# # example usage:
-# import time
-
-# if __name__ == "__main__":
-
-#     test_video= "alcohol_test_videos/alcohol1.mp4"
-#     test_image = "alcohol_test_images/test2.jpg"
-#     results1 = is_alcohol_detected(test_video)
-#     results2 = is_alcohol_detected(test_image)
-#     print(f"Video: {test_video} → {'Alcohol Detected' if results1 else 'No Alcohol'}")
-#     print(f"Image: {test_image} → {'Alcohol Detected' if results2 else 'No Alcohol'}")

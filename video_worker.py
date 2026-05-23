@@ -37,6 +37,7 @@ print("[INIT] Redis connected")
 # PATH HANDLING
 # =====================================================
 POSSIBLE_BASE_PATHS = [
+    os.getcwd(), 
     "/var/www/html/admin.fliqzworld.com/public/storage",
     "/var/www/html/admin.fliqzworld.com/storage",
     "/var/www/html/admin.fliqzworld.com/public_html/storage",

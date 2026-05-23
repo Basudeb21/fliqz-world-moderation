@@ -1,0 +1,2 @@
+redis-cli LPUSH fliqz_moderation_video_queue '{"type":"attachment","table":"attachments","id":"test-0001-0000-0000-000000000001","data":{"file":"uploads/istockphoto-1348076572-640-adpp-is_mHi4Ju2l.mp4","type":"videos","post_id":1,"user_id":1}}'
+SELECT * FROM attachments ORDER BY created_at DESC LIMIT 1;
