@@ -53,54 +53,191 @@ def detect_image(image_path: str) -> bool:
 # -------------------------
 # VIDEO DETECTION (FAST + STABLE)
 # -------------------------
+# def detect_video(video_path: str) -> bool:
+#     cap = cv2.VideoCapture(video_path)
+
+#     if not cap.isOpened():
+#         return False
+
+#     hit_count = 0
+#     frame_id = 0
+
+#     while True:
+#         ret, frame = cap.read()
+#         if not ret or frame is None:
+#             break
+
+#         frame_id += 1
+
+#         # Skip frames for speed
+#         if frame_id % FRAME_SKIP != 0:
+#             continue
+
+#         # Resize for faster inference (huge speed gain)
+#         frame = cv2.resize(frame, (640, 640))
+
+#         results = model(frame, conf=VID_CONF_THRESHOLD, verbose=False)
+
+#         if results and results[0].boxes is not None:
+#             for det in results[0].boxes:
+#                 cls = int(det.cls)
+#                 conf = float(det.conf)
+
+#                 if cls != ALCOHOL_CLASS_ID or conf < VID_CONF_THRESHOLD:
+#                     continue
+
+#                 x1, y1, x2, y2 = map(int, det.xyxy[0])
+#                 area = (x2 - x1) * (y2 - y1)
+
+#                 if area >= MIN_BOX_AREA:
+#                     hit_count += 1
+#                     break  # only count once per frame
+
+#         # Early exit → faster response
+#         if hit_count >= MIN_HITS:
+#             cap.release()
+#             return True
+
+#     cap.release()
+#     return False
+# -------------------------
+# VIDEO DETECTION (FAST + STABLE)
+# -------------------------
 def detect_video(video_path: str) -> bool:
+
     cap = cv2.VideoCapture(video_path)
 
     if not cap.isOpened():
         return False
 
     hit_count = 0
+
     frame_id = 0
 
+    detection_start_time = None
+
+    detection_end_time = None
+
     while True:
+
         ret, frame = cap.read()
+
         if not ret or frame is None:
             break
 
         frame_id += 1
 
-        # Skip frames for speed
+        # =========================================
+        # CURRENT VIDEO TIMESTAMP
+        # =========================================
+
+        timestamp_sec = (
+            cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        )
+
+        # =========================================
+        # SKIP FRAMES FOR SPEED
+        # =========================================
+
         if frame_id % FRAME_SKIP != 0:
             continue
 
-        # Resize for faster inference (huge speed gain)
-        frame = cv2.resize(frame, (640, 640))
+        # =========================================
+        # RESIZE FOR FASTER INFERENCE
+        # =========================================
 
-        results = model(frame, conf=VID_CONF_THRESHOLD, verbose=False)
+        frame = cv2.resize(
+            frame,
+            (640, 640)
+        )
 
-        if results and results[0].boxes is not None:
+        results = model(
+            frame,
+            conf=VID_CONF_THRESHOLD,
+            verbose=False
+        )
+
+        if (
+            results
+            and results[0].boxes is not None
+        ):
+
             for det in results[0].boxes:
+
                 cls = int(det.cls)
+
                 conf = float(det.conf)
 
-                if cls != ALCOHOL_CLASS_ID or conf < VID_CONF_THRESHOLD:
+                if (
+                    cls != ALCOHOL_CLASS_ID
+                    or conf < VID_CONF_THRESHOLD
+                ):
                     continue
 
-                x1, y1, x2, y2 = map(int, det.xyxy[0])
-                area = (x2 - x1) * (y2 - y1)
+                x1, y1, x2, y2 = map(
+                    int,
+                    det.xyxy[0]
+                )
+
+                area = (
+                    (x2 - x1)
+                    * (y2 - y1)
+                )
 
                 if area >= MIN_BOX_AREA:
-                    hit_count += 1
-                    break  # only count once per frame
 
-        # Early exit → faster response
+                    hit_count += 1
+
+                    # =================================
+                    # DURATION TRACKING
+                    # =================================
+
+                    if detection_start_time is None:
+                        detection_start_time = timestamp_sec
+
+                    detection_end_time = timestamp_sec
+
+                    break  # only count once/frame
+
+        # =========================================
+        # EARLY EXIT
+        # =========================================
+
         if hit_count >= MIN_HITS:
+
+            duration = (
+                detection_end_time
+                - detection_start_time
+            )
+
+            result = {
+                "detected": True,
+                "start_time": round(
+                    detection_start_time,
+                    2
+                ),
+                "end_time": round(
+                    detection_end_time,
+                    2
+                ),
+                "duration": round(
+                    duration,
+                    2
+                ),
+                "hits": hit_count
+            }
+
+            print(result)
+
             cap.release()
-            return True
+
+            return result
 
     cap.release()
-    return False
 
+    return {
+    "detected": False
+}
 
 # -------------------------
 # UNIVERSAL ENTRY POINT

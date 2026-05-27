@@ -5,12 +5,13 @@ import time
 import json
 from pathlib import Path
 from PIL import Image
-from model import owl_model, owl_processor, DEVICE
 
 from face_detect.minor_detect import is_minor
 from meetup_detect.personal_details_detect import detect_personal_info
 from violance_detect.violation_detect import is_violence_detected
-from merged_owlvit_detector import run_merged_detection
+from animal_detect.animal_detect import AnimalDetector
+from weapon_detect.weapon_detect import is_weapon_detected
+from drugs_detect.drugs_detect import is_drug_detected
 from nsfw.nsfw_detector import is_nsfw
 from alcohol_detect.detect_alcohol import is_alcohol_detected
 from smoking_detect.detect_smoking import is_smoking_detected
@@ -52,6 +53,9 @@ def get_valid_base_path():
     return POSSIBLE_BASE_PATHS[0]
 
 SERVER_STORAGE_PATH = get_valid_base_path()
+
+# Instantiate tested detectors (used in test.py)
+animal_detector = AnimalDetector()
 
 def normalize_file_path(original_file: str) -> str:
     """Convert relative upload paths to absolute filesystem paths."""
@@ -179,6 +183,7 @@ def process_redis(payload: dict):
     violence_detected = False
     alcohol_detected = False
     smoking_detected = False
+    drugs_detected = False
     weapon_detected = False
 
     # =====================================================
@@ -237,25 +242,31 @@ def process_redis(payload: dict):
         return
 
     # =====================================================
-    # 3️⃣ MERGED OWL DETECTION
+    # 3️⃣ ANIMAL & WEAPON DETECTION (use tested detectors)
     # =====================================================
-    print("🔍 Running merged OWL detection...")
+    print("🔍 Running animal and weapon detection (tested detectors)...")
 
-    media = load_media(file_path)
+    # animal_detector.is_animal accepts image or video paths and returns
+    # either a bool (for images) or a dict (for videos). Use file_path
+    # directly as this mirrors `test.py` usage.
+    try:
+        animal_result = animal_detector.is_animal(file_path)
+    except Exception as e:
+        print("Animal detection error:", e)
+        animal_result = False
 
-    if media is None:
-        print("❌ Unsupported media type")
-        return
+    # Normalize animal_detected to boolean
+    if isinstance(animal_result, dict):
+        animal_detected = bool(animal_result.get("detected", False))
+    else:
+        animal_detected = bool(animal_result)
 
-    merged = run_merged_detection(
-        media,
-        owl_model,
-        owl_processor,
-        DEVICE
-    )
-
-    animal_detected = merged["animal"]
-    weapon_detected = merged["weapon"]
+    # Weapon detection via existing YOLO-based module
+    try:
+        weapon_detected = is_weapon_detected(file_path)
+    except Exception as e:
+        print("Weapon detection error:", e)
+        weapon_detected = False
 
     if animal_detected:
         if nsfw_detected is None:
@@ -309,8 +320,24 @@ def process_redis(payload: dict):
     except Exception as e:
         print("Smoking error:", e)
 
+    # =====================================================
+    # 7️⃣ DRUGS DETECTION
+    # =====================================================
+    try:
+        print("💊 Checking for drugs...")
+        drugs_result = is_drug_detected(file_path)
+    except Exception as e:
+        print("Drugs error:", e)
+        drugs_result = False
+
+    # Normalize drugs_detected to boolean (function may return dict for videos)
+    if isinstance(drugs_result, dict):
+        drugs_detected = bool(drugs_result.get("detected", False))
+    else:
+        drugs_detected = bool(drugs_result)
+
     # MAP TO DAS
-    das_detected = alcohol_detected or smoking_detected
+    das_detected = alcohol_detected or smoking_detected or drugs_detected
 
     # ENSURE NSFW WAS AT LEAST CHECKED ONCE
     if nsfw_detected is None:
@@ -324,6 +351,7 @@ def process_redis(payload: dict):
     print(f"   Animal Detected: {animal_detected}")
     print(f"   Alcohol Detected: {alcohol_detected}")
     print(f"   Smoking Detected: {smoking_detected}")
+    print(f"   Drugs Detected: {drugs_detected}")
     print(f"   DAS (mapped): {das_detected}")
     print(f"   Minor Detected: {minor_detected}")
     print(f"   Personal Info Detected: {personal_info_detected}")
@@ -385,5 +413,5 @@ def worker():
 if __name__ == "__main__":
     worker()
     
-#"{\"type\":\"attachment\",\"table\":\"attachments\",\"id\":\"a83edaf06cb94905ad6d9f20b9e7dfc9\",\"data\":
+# "{\"type\":\"attachment\",\"table\":\"attachments\",\"id\":\"a83edaf06cb94905ad6d9f20b9e7dfc9\",\"data\":
 # {\"file\":\"uploads\\/posts\\/images\\/17665066961999.jpg\",\"type\":\"images\",\"post_id\":512,\"user_id\":6}}"

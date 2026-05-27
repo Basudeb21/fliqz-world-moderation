@@ -1,3 +1,4 @@
+#dynamic_update.py
 from datetime import datetime
 from sqlalchemy import select, update, insert
 from database import get_db
@@ -91,6 +92,104 @@ def dynamic_update(payload: dict, animal_detected=False, das_detected=False, min
 
         else:
             return False, "row_not_found"
+
+    except Exception as e:
+        db.rollback()
+        return False, str(e)
+
+
+def insert_detection_timestamps(payload: dict, records: list, table_name: str = "moderation_timestamps"):
+    """
+    Insert detection timestamp records into a separate table.
+
+    records: list of dicts with keys: post_id, label, start_time, end_time, duration
+    This function attempts to insert rows and fails silently (returns False,msg)
+    if the target table does not exist or insertion fails.
+    """
+    if not records:
+        return False, "no_records"
+
+    try:
+        table = get_dynamic_table(table_name)
+    except Exception as e:
+        return False, f"table_load_failed: {e}"
+
+    db = next(get_db())
+    try:
+        # attempt to resolve attachment_id for records when possible
+        attachments_table = None
+        for rec in records:
+            # ensure post_id exists in record, fallback to payload.data.post_id
+            post_id = rec.get("post_id") or payload.get("data", {}).get("post_id") or payload.get("post_id")
+
+            insert_row = {
+                k: v for k, v in rec.items()
+                if k in table.c
+            }
+
+            # include post_id if column exists
+            if "post_id" in table.c and "post_id" not in insert_row:
+                insert_row["post_id"] = post_id
+
+            # If moderation_timestamps has attachment_id column, try to find attachment id by post_id
+            if "attachment_id" in table.c and "attachment_id" not in insert_row:
+                try:
+                    if attachments_table is None:
+                        attachments_table = get_dynamic_table("attachments")
+
+                    if post_id is not None:
+                        stmt = select(attachments_table).where(attachments_table.c.post_id == post_id)
+                        found = db.execute(stmt).fetchone()
+                        if found and "id" in attachments_table.c:
+                            insert_row["attachment_id"] = found[attachments_table.c.id]
+                except Exception:
+                    # best-effort — if attachments table missing or query fails, skip
+                    pass
+
+            # deduplicate: skip if an identical row already exists
+            try:
+                dup_clause = []
+
+                # Always deduplicate on post_id + label — these two together are the
+                # minimum identity of a detection event. All other fields are optional.
+                if "post_id" in table.c:
+                    dup_clause.append(table.c.post_id == insert_row.get("post_id"))
+                if "label" in table.c:
+                    dup_clause.append(table.c.label == insert_row.get("label"))
+
+                # Only add time/type fields to the clause if they are actually non-None.
+                # If they are None and included, the WHERE becomes "col = NULL" which
+                # never matches in SQL — the dedup check silently fails every time.
+                if insert_row.get("start_time") is not None and "start_time" in table.c:
+                    dup_clause.append(table.c.start_time == insert_row["start_time"])
+                if insert_row.get("end_time") is not None and "end_time" in table.c:
+                    dup_clause.append(table.c.end_time == insert_row["end_time"])
+                if insert_row.get("duration") is not None and "duration" in table.c:
+                    dup_clause.append(table.c.duration == insert_row["duration"])
+                if insert_row.get("detector_type") is not None and "detector_type" in table.c:
+                    dup_clause.append(table.c.detector_type == insert_row["detector_type"])
+
+                duplicate = False
+                if dup_clause:
+                    sel = select(table).where(*dup_clause)
+                    found_dup = db.execute(sel).fetchone()
+                    if found_dup:
+                        duplicate = True
+
+                if duplicate:
+                    # skip inserting duplicate
+                    continue
+
+            except Exception:
+                # if dedupe check fails for any reason, fall back to inserting
+                pass
+
+            # attempt insert
+            stmt = insert(table).values(**insert_row)
+            db.execute(stmt)
+
+        db.commit()
+        return True, "inserted"
 
     except Exception as e:
         db.rollback()

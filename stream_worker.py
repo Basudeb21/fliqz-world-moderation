@@ -5,7 +5,10 @@ import time
 import json
 from pathlib import Path
 from PIL import Image
-from model import owl_model, owl_processor, DEVICE
+from model import DEVICE
+from animal_detect.animal_detect import AnimalDetector
+from weapon_detect.weapon_detect import is_weapon_detected
+from drugs_detect.drugs_detect import is_drug_detected
 
 from face_detect.minor_detect import is_minor
 from meetup_detect.personal_details_detect import detect_personal_info  
@@ -174,6 +177,10 @@ def process_redis(payload: dict):
     nsfw_detected = None
     violence_detected = False
     weapon_detected = False
+    drugs_detected = False
+
+    # instantiate detectors
+    animal_detector = AnimalDetector()
 
 
 
@@ -229,35 +236,46 @@ def process_redis(payload: dict):
         return
 
     # =====================================================
-    # 3️⃣ MERGED OWL DETECTION
+    # 3️⃣ ANIMAL / WEAPON / DRUGS DETECTION (replace OWL)
     # =====================================================
-    print("🔍 Running merged OWL detection...")
+    try:
+        print("🔍 Checking for animals...")
+        animal_result = animal_detector.is_animal(file_path)
+        if isinstance(animal_result, dict):
+            animal_detected = bool(animal_result.get("detected", False))
+        else:
+            animal_detected = bool(animal_result)
+    except Exception as e:
+        print("Animal error:", e)
 
-    # -----------------------------
-    # LOAD MEDIA ONCE ✅
-    # -----------------------------
-    media = load_media(file_path)
+    try:
+        print("🔍 Checking for weapons...")
+        weapon_result = is_weapon_detected(file_path)
+        if isinstance(weapon_result, dict):
+            weapon_detected = bool(weapon_result.get("detected", False))
+        else:
+            weapon_detected = bool(weapon_result)
+    except Exception as e:
+        print("Weapon error:", e)
 
-    if media is None:
-        print("❌ Unsupported media type")
-        return
-    
-    merged = run_merged_detection(
-        media,
-        owl_model,
-        owl_processor,
-        DEVICE
-    )
-
-    animal_detected = merged["animal"]
-    weapon_detected = merged["weapon"]
+    try:
+        print("🔍 Checking for drugs...")
+        drugs_result = is_drug_detected(file_path)
+        if isinstance(drugs_result, dict):
+            drugs_detected = bool(drugs_result.get("detected", False))
+        else:
+            drugs_detected = bool(drugs_result)
+    except Exception as e:
+        print("Drugs error:", e)
 
     if animal_detected:
-        print("🔍 Animal detected → checking NSFW...")
         if nsfw_detected is None:
             try:
-                print("🔍 Animal detected → checking NSFW...")
-                nsfw_detected = is_nsfw(file_path)
+                nsfw_result = is_nsfw(file_path)
+                if isinstance(nsfw_result, dict):
+                    nsfw_detected = bool(nsfw_result.get("detected", False))
+                else:
+                    nsfw_detected = bool(nsfw_result)
             except Exception as e:
                 print("NSFW error:", e)
 
@@ -272,6 +290,7 @@ def process_redis(payload: dict):
             print("✅ Detection complete.")
             print(f"   Animal Detected: {animal_detected}")
             print(f"   Weapon Detected: {weapon_detected}")
+            print(f"   Drugs Detected: {drugs_detected}")
             print(f"   NSFW Detected: {nsfw_detected}")
             print("💾 DB Update:", status if success else f"FAILED ({status})")
             return
@@ -281,7 +300,11 @@ def process_redis(payload: dict):
     # =====================================================
     try:
         print("🔍 Checking for violence...")
-        violence_detected = is_violence_detected(file_path)
+        violence_result = is_violence_detected(file_path)
+        if isinstance(violence_result, dict):
+            violence_detected = bool(violence_result.get("detected", False))
+        else:
+            violence_detected = bool(violence_result)
     except Exception as e:
         print("Violence error:", e)
 
@@ -291,7 +314,11 @@ def process_redis(payload: dict):
     # =====================================================
     try:
         print("🍺 Checking for alcohol...")
-        alcohol_detected = is_alcohol_detected(file_path)
+        alcohol_result = is_alcohol_detected(file_path)
+        if isinstance(alcohol_result, dict):
+            alcohol_detected = bool(alcohol_result.get("detected", False))
+        else:
+            alcohol_detected = bool(alcohol_result)
     except Exception as e:
         print("Alcohol error:", e)
 
@@ -300,14 +327,31 @@ def process_redis(payload: dict):
     # =====================================================
     try:
         print("🚬 Checking for smoking...")
-        smoking_detected = is_smoking_detected(file_path)
+        smoking_result = is_smoking_detected(file_path)
+        if isinstance(smoking_result, dict):
+            smoking_detected = bool(smoking_result.get("detected", False))
+        else:
+            smoking_detected = bool(smoking_result)
     except Exception as e:
         print("Smoking error:", e)
 
     # =====================================================
+    # 7️⃣ DRUGS DETECTION
+    # =====================================================
+    try:
+        print("💊 Checking for drugs...")
+        drugs_result = is_drug_detected(file_path)
+        if isinstance(drugs_result, dict):
+            drugs_detected = bool(drugs_result.get("detected", False))
+        else:
+            drugs_detected = bool(drugs_result)
+    except Exception as e:
+        print("Drugs error:", e)
+
+    # =====================================================
     # MAP TO DAS (DB COMPATIBILITY)
     # =====================================================
-    das_detected = alcohol_detected or smoking_detected    
+    das_detected = alcohol_detected or smoking_detected or drugs_detected
 
     # =====================================================
     # ENSURE NSFW WAS AT LEAST CHECKED ONCE
@@ -315,7 +359,11 @@ def process_redis(payload: dict):
     if nsfw_detected is None:
         try:
             print("🔍 Final NSFW check...")
-            nsfw_detected = is_nsfw(file_path)
+            nsfw_result = is_nsfw(file_path)
+            if isinstance(nsfw_result, dict):
+                nsfw_detected = bool(nsfw_result.get("detected", False))
+            else:
+                nsfw_detected = bool(nsfw_result)
         except Exception as e:
             print("NSFW error:", e)
     
